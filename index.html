@@ -600,6 +600,7 @@ tr:hover td { background: var(--paper); }
 </header>
 
 <!-- BOTTOM NAV (มือถือ) -->
+<div id="sync-badge" style="display:none;position:fixed;top:68px;right:12px;background:#16a34a;color:white;padding:6px 14px;border-radius:20px;font-size:12px;font-weight:700;align-items:center;gap:6px;z-index:999;box-shadow:0 2px 12px rgba(0,0,0,.2);">📡 <span id="sync-badge-text"></span></div>
 <nav class="bottom-nav">
   <div class="bnav-items">
     <button class="bnav-item on" id="bn-dashboard" onclick="nav('dashboard',null);setBnav('dashboard')">
@@ -620,17 +621,6 @@ tr:hover td { background: var(--paper); }
   </div>
 </nav>
 
-<!-- SYNC BADGE -->
-<div id="sync-badge" style="
-  display:none;position:fixed;top:68px;right:12px;
-  background:#16a34a;color:white;
-  padding:6px 12px;border-radius:20px;
-  font-size:11px;font-weight:700;
-  align-items:center;gap:6px;
-  z-index:999;box-shadow:0 2px 12px rgba(0,0,0,0.2);
-  transition:all .3s;
-">📡 <span id="sync-badge-text">ซิงค์แล้ว</span></div>
-
 <!-- MORE MENU -->
 <div class="more-overlay" id="more-overlay" onclick="closeMore()"></div>
 <div class="more-menu" id="more-menu">
@@ -641,12 +631,6 @@ tr:hover td { background: var(--paper); }
   <button class="more-item" onclick="nav('rooms',null);setBnav('');closeMore()">🏫 ห้อง</button>
   <button class="more-item" onclick="nav('alerts',null);setBnav('');closeMore()">🔔 แจ้งเตือน</button>
   <div style="border-top:1px solid rgba(255,255,255,0.1);margin:6px 0;"></div>
-  <div style="border-top:1px solid rgba(255,255,255,0.1);margin:4px 0;"></div>
-  <div style="padding:6px 14px;font-size:10px;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:.5px;">Google Sheets</div>
-  <button class="more-item" onclick="gsPushAll();closeMore()" style="color:#6ee7b7;">⬆️ อัปโหลดข้อมูลทั้งหมด</button>
-  <button class="more-item" onclick="gsPullStudents();closeMore()" style="color:#93c5fd;">⬇️ ดึงนักเรียนจาก Sheets</button>
-  <button class="more-item" onclick="gsPullPayments();closeMore()" style="color:#fbbf24;">⬇️ ดึงการชำระจาก Sheets</button>
-  <button class="more-item" onclick="toggleGSSync();closeMore()" id="gs-toggle-btn">📡 ซิงค์: เปิด</button>
   <button class="more-item" onclick="resetToDefault();closeMore()" style="color:#f87171;">🔄 รีเซ็ตข้อมูล</button>
 </div>
 
@@ -1568,160 +1552,29 @@ function save(key, val) {
   try { localStorage.setItem('lmt_'+key, JSON.stringify(val)); } catch(e){}
 }
 
-// Google Sheets Sync
-var gsSyncEnabled = true;
+// Google Sheets URL
 var GS_URL = 'https://script.google.com/macros/s/AKfycbzzCJss8Ahpq-TVil9V6ARSOGgZ_8vLai8hkCw0zsU5M3CJPKbDRm-vE8oM3gsTh7XRsg/exec';
 
 function gsSync(action, payload) {
-  if (!gsSyncEnabled) return;
   try {
     fetch(GS_URL, {
       method: 'POST',
       mode: 'no-cors',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: action, payload: payload })
-    }).then(function() {
-      showSyncBadge('OK ซิงค์สำเร็จ', true);
-    }).catch(function() {
-      showSyncBadge('! ไม่มีอินเทอร์เน็ต', false);
     });
-  } catch(e) { console.warn('GS:', e); }
-}
-
-// Push ข้อมูลทั้งหมดไป Google Sheets
-function gsPushAll() {
-  showSyncBadge('... กำลังอัปโหลด', true);
-  var total = DB.students.length + payments.length;
-  var done = 0;
-  function tick() {
-    done++;
-    if (done >= total) showSyncBadge('OK อัปโหลดครบ ' + total + ' รายการ', true);
-  }
-  DB.students.forEach(function(s) {
-    fetch(GS_URL, {
-      method: 'POST', mode: 'no-cors',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'saveStudent', payload: s })
-    }).then(tick).catch(tick);
-  });
-  payments.forEach(function(p) {
-    var stu = DB.students.find(function(x){return x.id===p.studentId;});
-    fetch(GS_URL, {
-      method: 'POST', mode: 'no-cors',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'savePayment', payload: Object.assign({}, p, { studentName: stu ? stu.name : '' }) })
-    }).then(tick).catch(tick);
-  });
-  if (total === 0) showSyncBadge('✅ ไม่มีข้อมูลที่จะอัปโหลด', true);
-}
-
-// Pull ข้อมูลนักเรียนจาก Google Sheets
-function gsPullStudents() {
-  showSyncBadge('... ดึงข้อมูล', true);
-  var pullUrl = GS_URL + '?action=getStudents';
-  fetch(pullUrl)
-    .then(function(r) { return r.json(); })
-    .then(function(result) {
-      if (!result.success || !result.data || !result.data.length) {
-        showSyncBadge('! ไม่พบข้อมูลใน Sheets', false);
-        return;
-      }
-      var gsStudents = result.data;
-      var added = 0; var updated = 0;
-      gsStudents.forEach(function(gs) {
-        var existing = DB.students.find(function(x) { return String(x.id) === String(gs.id); });
-        var formatted = {
-          id: +gs.id || Date.now(),
-          name: gs.name || '',
-          nick: gs.nick || '',
-          level: gs.level || 'ม.1',
-          group: gs.group || '',
-          subjects: typeof gs.subjects === 'string'
-            ? gs.subjects.split(', ').filter(function(s){return s;})
-            : (gs.subjects || []),
-          parent: gs.parent || '',
-          relation: gs.relation || 'มารดา',
-          parentPhone: gs.parentPhone || '',
-          phone: gs.phone || '',
-          note: gs.note || '',
-          startDate: gs.startDate || '',
-          status: gs.status || 'active',
-          notes: []
-        };
-        if (existing) {
-          Object.assign(existing, formatted);
-          updated++;
-        } else {
-          DB.students.push(formatted);
-          added++;
-        }
-      });
-      persist();
-      renderStudents();
-      renderDashboard();
-      showSyncBadge('✅ ดึงแล้ว +' + added + ' ใหม่ อัปเดต ' + updated + ' คน', true);
-      if (added > 0 || updated > 0) {
-        alert('✅ ดึงจาก Google Sheets เรียบร้อย!
-เพิ่มใหม่: ' + added + ' คน
-อัปเดต: ' + updated + ' คน');
-      }
-    })
-    .catch(function(err) {
-      showSyncBadge('⚠️ ดึงไม่สำเร็จ: ' + err.message, false);
-    });
-}
-
-// Pull การชำระเงินจาก Google Sheets
-function gsPullPayments() {
-  showSyncBadge('... ดึงรายการชำระ', true);
-  fetch(GS_URL + '?action=getPayments')
-    .then(function(r) { return r.json(); })
-    .then(function(result) {
-      if (!result.success || !result.data || !result.data.length) {
-        showSyncBadge('! ไม่พบรายการใน Sheets', false);
-        return;
-      }
-      var added = 0;
-      result.data.forEach(function(gp) {
-        var exists = payments.find(function(x){return String(x.id)===String(gp.id);});
-        if (!exists) {
-          var stu = DB.students.find(function(s){return s.name===gp.studentName;});
-          payments.push({
-            id: +gp.id || Date.now(),
-            studentId: stu ? stu.id : 0,
-            month: +gp.month || 1,
-            year: +gp.year || new Date().getFullYear()+543,
-            total: +gp.total || 0,
-            paid: +gp.paid || 0,
-            balance: +gp.balance || 0,
-            status: gp.status || 'unpaid',
-            date: gp.date || '',
-            method: gp.method || '',
-            note: gp.note || ''
-          });
-          added++;
-        }
-      });
-      savePayments();
-      renderPayStats && renderPayStats();
-      renderPayTable && renderPayTable();
-      showSyncBadge('✅ ชำระเงิน +' + added + ' รายการ', true);
-      if (added > 0) alert('✅ ดึงรายการชำระเงินจาก Sheets เพิ่ม ' + added + ' รายการ');
-    })
-    .catch(function(err) {
-      showSyncBadge('⚠️ ' + err.message, false);
-    });
+  } catch(e) {}
 }
 
 function showSyncBadge(msg, ok) {
-  var badge = document.getElementById('sync-badge');
-  if (!badge) return;
-  var txt = document.getElementById('sync-badge-text');
-  if (txt) txt.textContent = msg;
-  badge.style.background = ok ? '#16a34a' : '#dc2626';
-  badge.style.display = 'flex';
-  clearTimeout(badge._t);
-  badge._t = setTimeout(function() { badge.style.display = 'none'; }, 3000);
+  var b = document.getElementById('sync-badge');
+  if (!b) return;
+  var t = document.getElementById('sync-badge-text');
+  if (t) t.textContent = msg;
+  b.style.background = ok ? '#16a34a' : '#dc2626';
+  b.style.display = 'flex';
+  clearTimeout(b._t);
+  b._t = setTimeout(function() { b.style.display = 'none'; }, 3000);
 }
 
 let DB = {};
@@ -2574,10 +2427,8 @@ function saveStudent() {
     notes: []
   });
   persist();
-  // Sync new student to Google Sheets
-  var newStu = DB.students[DB.students.length - 1];
-  if (newStu) gsSync('saveStudent', newStu);
-  showSyncBadge('✅ บันทึกและซิงค์ Google Sheets แล้ว', true);
+  var ns = DB.students[DB.students.length-1];
+  if (ns) gsSync('saveStudent', ns);
   renderStudents(); closeM('addStudent');
   document.getElementById('st-name').value='';
   document.getElementById('st-nick').value='';
@@ -2645,11 +2496,7 @@ function updateStudent() {
   s.note = document.getElementById('est-note').value.trim();
   s.startDate = document.getElementById('est-start').value;
   s.status = document.getElementById('est-status').value;
-  persist();
-  // Sync updated student to Google Sheets
-  gsSync('saveStudent', s);
-  showSyncBadge('✅ อัปเดตและซิงค์ Google Sheets แล้ว', true);
-  renderStudents(); closeM('editStudent');
+  persist(); renderStudents(); closeM('editStudent');
   hideProfile();
 }
 
@@ -2729,7 +2576,7 @@ function initPaymentView() {
 
 function refreshPaymentView() {
   const btn = document.getElementById('pay-refresh-btn');
-  if (btn) { btn.textContent = '... กำลังโหลด'; btn.disabled = true; }
+  if (btn) { btn.textContent = '⏳ กำลังโหลด...'; btn.disabled = true; }
   // Reload students from localStorage (in case updated in another tab)
   const fresh = load('lmt_students') || load('students');
   if (fresh && fresh.length && !fresh[0].name.startsWith('ด.')) {
@@ -2803,18 +2650,17 @@ function savePayment() {
   const id   = payments.length ? Math.max(...payments.map(p=>p.id))+1 : 1;
   payments.push({ id, studentId, month:+document.getElementById('pay-month').value, year:+document.getElementById('pay-year').value, total, paid, balance:bal, status:payCurrentStatus, date:document.getElementById('pay-date').value, method:document.getElementById('pay-method').value, note:document.getElementById('pay-note').value.trim() });
   savePayments();
-  // Sync to Google Sheets
-  var lastPay = payments[payments.length - 1];
-  if (lastPay) {
-    var pstu = DB.students.find(function(x){return x.id===lastPay.studentId;});
-    gsSync('savePayment', Object.assign({}, lastPay, { studentName: pstu ? pstu.name : '' }));
-  }
   renderPayStats(); renderPayTable();
   document.getElementById('pay-total').value='';
   document.getElementById('pay-paid').value='';
   document.getElementById('pay-note').value='';
   payRecalc();
-  showSyncBadge('✅ บันทึกและซิงค์ Google Sheets แล้ว', true);
+  var lp = payments[payments.length-1];
+  if (lp) {
+    var ps = DB.students.find(function(x){return x.id===lp.studentId;});
+    gsSync('savePayment', Object.assign({}, lp, {studentName: ps ? ps.name : ''}));
+  }
+  showSyncBadge('OK: บันทึก + ซิงค์แล้ว', true);
 }
 
 let epCurrentStatus = 'paid';
@@ -2928,12 +2774,6 @@ function updatePayment() {
     note:   document.getElementById('ep-note').value.trim(),
   });
   savePayments();
-  // Sync updated payment to Google Sheets
-  var upPay = payments[idx];
-  if (upPay) {
-    var upStu = DB.students.find(function(x){return x.id===upPay.studentId;});
-    gsSync('savePayment', Object.assign({}, upPay, { studentName: upStu ? upStu.name : '' }));
-  }
   renderPayStats();
   renderPayTable();
   closeM('editPayment');
@@ -3028,19 +2868,6 @@ function showReceipt(id) {
       🙏 ขอบคุณที่ไว้วางใจ LearnMark
     </div>
   `;
-  // Sync receipt to Google Sheets
-  gsSync('saveReceipt', {
-    refNo: refNo,
-    studentName: s.name,
-    subjects: (s.subjects || []).join(', '),
-    month: p.month,
-    year: p.year,
-    total: p.total,
-    paid: p.paid,
-    balance: p.balance,
-    status: p.status,
-    printDate: printDate
-  });
   window._curReceipt = { p, s, refNo, printDate };
   document.getElementById('ov-receipt').classList.add('on');
 }
@@ -3513,13 +3340,6 @@ function renderCalMonthlySummary() {
         </div>`
     }`;
   }
-}
-
-function toggleGSSync() {
-  gsSyncEnabled = !gsSyncEnabled;
-  var btn = document.getElementById('gs-toggle-btn');
-  if (btn) btn.textContent = '📡 ซิงค์ Google Sheets: ' + (gsSyncEnabled ? 'เปิด' : 'ปิด');
-  showSyncBadge(gsSyncEnabled ? '📡 เปิดการซิงค์' : '📡 ปิดการซิงค์', gsSyncEnabled);
 }
 
 function setBnav(name) {
