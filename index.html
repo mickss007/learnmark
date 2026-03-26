@@ -631,7 +631,7 @@ tr:hover td { background: var(--paper); }
   <button class="more-item" onclick="nav('rooms',null);setBnav('');closeMore()">🏫 ห้อง</button>
   <button class="more-item" onclick="nav('alerts',null);setBnav('');closeMore()">🔔 แจ้งเตือน</button>
   <div style="border-top:1px solid rgba(255,255,255,0.1);margin:6px 0;"></div>
-  <button class="more-item" onclick="resetToDefault();closeMore()" style="color:#f87171;">🔄 รีเซ็ตข้อมูล</button>
+  <button class="more-item" onclick="syncAllData();closeMore()" style="color:#6ee7b7;">📡 ซิงค์ข้อมูลกับ Sheets</button>
 </div>
 
 <!-- ======== VIEWS ======== -->
@@ -743,7 +743,8 @@ tr:hover td { background: var(--paper); }
     <div><div class="ph-title">ภาพรวมระบบ</div><div class="ph-sub">LearnMark Tutor — ระบบจัดตารางสอน</div></div>
     <div class="ph-actions">
       <button class="btn btn-ghost" onclick="nav('timetable',null)">📅 ดูตารางสอน</button>
-      <button class="btn btn-red btn-sm" onclick="resetToDefault()" style="font-size:11px">🔄 รีเซ็ตข้อมูล</button>
+      <button class="btn btn-green" onclick="syncAllData()" id="sync-btn" style="font-size:13px;">📡 ซิงค์ข้อมูล</button>
+      
       <button class="btn btn-primary" onclick="openM('addSchedule')">＋ เพิ่มคาบเรียน</button>
     </div>
   </div>
@@ -1554,6 +1555,107 @@ function save(key, val) {
 
 // Google Sheets URL
 var GS_URL = 'https://script.google.com/macros/s/AKfycbzzCJss8Ahpq-TVil9V6ARSOGgZ_8vLai8hkCw0zsU5M3CJPKbDRm-vE8oM3gsTh7XRsg/exec';
+
+function syncAllData() {
+  var btn = document.getElementById('sync-btn');
+  if (btn) { btn.textContent = '... ซิงค์...'; btn.disabled = true; }
+  showSyncBadge('กำลังซิงค์...', true);
+
+  // STEP 1: Pull จาก Sheets ก่อน
+  fetch(GS_URL + '?action=getStudents')
+    .then(function(r) { return r.json(); })
+    .then(function(res) {
+      if (res.ok && res.students && res.students.length > 1) {
+        var headers = res.students[0];
+        var rows = res.students.slice(1);
+        var pulled = 0;
+        rows.forEach(function(row) {
+          if (!row[0]) return;
+          var obj = {};
+          headers.forEach(function(h, i) { obj[h] = row[i]; });
+          var subjects = obj.subjects ? obj.subjects.split(', ').filter(function(s){return s;}) : [];
+          var existing = DB.students.find(function(s){ return String(s.id) === String(obj.id); });
+          if (existing) {
+            existing.name = obj.name || existing.name;
+            existing.nick = obj.nick || existing.nick;
+            existing.level = obj.level || existing.level;
+            existing.group = obj.group || existing.group;
+            existing.subjects = subjects.length ? subjects : existing.subjects;
+            existing.parentPhone = obj.parentPhone || existing.parentPhone;
+            existing.note = obj.note || existing.note;
+            existing.status = obj.status || existing.status;
+          } else {
+            DB.students.push({
+              id: +obj.id || Date.now(),
+              name: obj.name || '',
+              nick: obj.nick || '',
+              level: obj.level || 'ม.1',
+              group: obj.group || '',
+              subjects: subjects,
+              parent: '', relation: 'มารดา',
+              parentPhone: obj.parentPhone || '',
+              phone: '', note: obj.note || '',
+              startDate: obj.startDate || '',
+              status: obj.status || 'active',
+              notes: []
+            });
+            pulled++;
+          }
+        });
+        persist();
+        if (typeof renderStudents === 'function') renderStudents();
+        if (typeof renderDashboard === 'function') renderDashboard();
+      }
+    })
+    .catch(function() {})
+    .finally(function() {
+      // STEP 2: Push ทั้งหมดกลับไป Sheets
+      var items = [];
+      DB.students.forEach(function(s) {
+        items.push({ action: 'saveStudent', data: { id: s.id, values: [
+          s.id, s.name, s.nick, s.level, s.group,
+          (s.subjects||[]).join(', '), s.parentPhone||'', s.note||'', s.startDate||'', s.status||'active'
+        ]}});
+      });
+      payments.forEach(function(p) {
+        var stu = DB.students.find(function(x){ return x.id === p.studentId; });
+        items.push({ action: 'savePayment', data: { id: p.id, values: [
+          p.id, stu ? stu.name : '', p.month, p.year,
+          p.total, p.paid, p.balance, p.status, p.date||'', p.method||'', p.note||''
+        ]}});
+      });
+
+      var done = 0;
+      var total = items.length;
+
+      if (total === 0) {
+        showSyncBadge('OK ซิงค์เสร็จ', true);
+        if (btn) { btn.textContent = '📡 ซิงค์ข้อมูล'; btn.disabled = false; }
+        return;
+      }
+
+      items.forEach(function(item) {
+        fetch(GS_URL, {
+          method: 'POST', mode: 'no-cors',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(item)
+        }).then(function() {
+          done++;
+          if (done >= total) {
+            showSyncBadge('OK ซิงค์ครบ ' + total + ' รายการ', true);
+            if (btn) { btn.textContent = '📡 ซิงค์ข้อมูล'; btn.disabled = false; }
+          }
+        }).catch(function() {
+          done++;
+          if (done >= total) {
+            showSyncBadge('ซิงค์บางส่วน', false);
+            if (btn) { btn.textContent = '📡 ซิงค์ข้อมูล'; btn.disabled = false; }
+          }
+        });
+      });
+    });
+}
+
 
 function gsSync(action, payload) {
   try {
